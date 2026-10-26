@@ -31,7 +31,7 @@
             </div>
             <div class="text-right">
                 <div class="text-2xl font-black text-emerald-400" id="score">0 pkt</div>
-                <div class="text-xs text-slate-400" id="combo">Mnożnik: x1</div>
+                <div class="text-xs font-semibold text-yellow-400" id="level">Poziom: 1</div>
             </div>
         </div>
 
@@ -43,8 +43,7 @@
             <div id="overlay" class="absolute inset-0 bg-slate-950/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center">
                 <h2 id="overlayTitle" class="text-3xl font-extrabold text-yellow-400 mb-2">Zajmij Miejsce!</h2>
                 <p id="overlayDesc" class="text-sm text-slate-300 mb-6 max-w-md">
-                    Szybko klikaj w podświetlone na żółto miejsca na trybunie, aby posadzić kibica swojej drużyny (niebieski). 
-                    Jeśli spóźnisz się, miejsce zajmie kibic drużyny przeciwna (czerwony)!
+                    Szybko klikaj w podświetlone miejsca! Tempo gry rośnie z każdym zajętym miejscem, a czasy reakcji są losowe.
                 </p>
                 <button id="startBtn" class="bg-yellow-500 hover:bg-yellow-400 text-slate-950 font-bold px-8 py-3 rounded-full text-lg transition duration-200 shadow-lg transform active:scale-95">
                     Graj teraz
@@ -77,7 +76,7 @@
         const overlayDesc = document.getElementById('overlayDesc');
         const startBtn = document.getElementById('startBtn');
         const scoreEl = document.getElementById('score');
-        const comboEl = document.getElementById('combo');
+        const levelEl = document.getElementById('level');
         const playerFansEl = document.getElementById('playerFansCount');
         const rivalFansEl = document.getElementById('rivalFansCount');
         const freeSeatsEl = document.getElementById('freeSeatsCount');
@@ -98,8 +97,8 @@
         let score = 0;
         let combo = 0;
         let isPlaying = false;
-        let timerId = null;
-        let baseTime = 2000; // time in ms to click
+        let totalClicks = 0;
+        let baseTime = 1800; // Czas początkowy w ms
 
         // Audio Context (Synthesized SFX)
         let audioCtx = null;
@@ -132,11 +131,10 @@
                 this.c = c;
                 this.x = OFFSET_LEFT + c * (SEAT_WIDTH + PADDING_X);
                 this.y = OFFSET_TOP + r * (SEAT_HEIGHT + PADDING_Y);
-                this.status = 'empty'; // 'empty', 'player', 'rival'
+                this.status = 'empty';
             }
 
             draw() {
-                // Draw seat base
                 ctx.lineWidth = 2;
                 if (this.status === 'empty') {
                     ctx.fillStyle = '#334155';
@@ -149,21 +147,17 @@
                     ctx.strokeStyle = '#ef4444';
                 }
 
-                // Rounded Rect for Seat
                 ctx.beginPath();
                 ctx.roundRect(this.x, this.y, SEAT_WIDTH, SEAT_HEIGHT, 6);
                 ctx.fill();
                 ctx.stroke();
 
-                // Draw Fan Avatar if occupied
                 if (this.status !== 'empty') {
-                    // Head
                     ctx.fillStyle = this.status === 'player' ? '#93c5fd' : '#fca5a5';
                     ctx.beginPath();
                     ctx.arc(this.x + SEAT_WIDTH / 2, this.y + 12, 7, 0, Math.PI * 2);
                     ctx.fill();
 
-                    // Body
                     ctx.fillStyle = this.status === 'player' ? '#2563eb' : '#dc2626';
                     ctx.beginPath();
                     ctx.arc(this.x + SEAT_WIDTH / 2, this.y + 28, 10, Math.PI, 0);
@@ -182,11 +176,9 @@
         }
 
         function drawField() {
-            // Background / Pitch view at top
             ctx.fillStyle = '#0f172a';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Pitch Banner
             ctx.fillStyle = '#15803d';
             ctx.fillRect(0, 0, canvas.width, 45);
             ctx.fillStyle = '#ffffff';
@@ -194,24 +186,21 @@
             ctx.textAlign = 'center';
             ctx.fillText('BOISKO - MECZ O MIEJSCE NA TRYBUNACH', canvas.width / 2, 28);
 
-            // Draw Seats
             seats.forEach(seat => seat.draw());
 
-            // Draw Target Highlight
             if (activeTarget && activeTarget.seat.status === 'empty') {
                 const seat = activeTarget.seat;
                 const elapsed = Date.now() - activeTarget.startTime;
                 const progress = Math.min(1, elapsed / activeTarget.duration);
 
-                // Pulse ring
-                ctx.strokeStyle = '#facc15';
+                // Kolor pierścienia w zależności od czasu (bardzo szybkie na czerwono)
+                ctx.strokeStyle = activeTarget.isFast ? '#ef4444' : '#facc15';
                 ctx.lineWidth = 3;
                 ctx.beginPath();
                 ctx.roundRect(seat.x - 3, seat.y - 3, SEAT_WIDTH + 6, SEAT_HEIGHT + 6, 8);
                 ctx.stroke();
 
-                // Countdown Bar
-                ctx.fillStyle = '#facc15';
+                ctx.fillStyle = activeTarget.isFast ? '#ef4444' : '#facc15';
                 ctx.fillRect(seat.x, seat.y + SEAT_HEIGHT + 3, SEAT_WIDTH * (1 - progress), 4);
             }
         }
@@ -221,8 +210,10 @@
             const rivalFans = seats.filter(s => s.status === 'rival').length;
             const freeSeats = seats.filter(s => s.status === 'empty').length;
 
+            const currentLevel = Math.floor(totalClicks / 5) + 1;
+
             scoreEl.innerText = `${score} pkt`;
-            comboEl.innerText = `Mnożnik: x${Math.min(5, Math.floor(combo / 3) + 1)}`;
+            levelEl.innerText = `Poziom: ${currentLevel}`;
             playerFansEl.innerText = playerFans;
             rivalFansEl.innerText = rivalFans;
             freeSeatsEl.innerText = freeSeats;
@@ -241,118 +232,14 @@
             const randomIndex = Math.floor(Math.random() * emptySeats.length);
             const selectedSeat = emptySeats[randomIndex];
 
-            // Calculate difficulty speed (gets faster as stadium fills)
-            const filledRatio = (seats.length - emptySeats.length) / seats.length;
-            const timeForSeat = Math.max(600, baseTime - (filledRatio * 1100));
+            // 1. Zwiększanie poziomu trudności (skracanie czasu bazowego)
+            const speedFactor = Math.min(1200, totalClicks * 25);
+            let currentBase = Math.max(450, baseTime - speedFactor);
+
+            // 2. Losowa zmienność (±30% od czasu bazowego)
+            const randomMultiplier = 0.7 + (Math.random() * 0.6);
+            const finalDuration = Math.max(350, currentBase * randomMultiplier);
 
             activeTarget = {
                 seat: selectedSeat,
-                startTime: Date.now(),
-                duration: timeForSeat
-            };
-
-            playSound(587, 0.1, 'triangle'); // D5 note prompt
-        }
-
-        function gameLoop() {
-            if (!isPlaying) return;
-
-            if (activeTarget) {
-                const elapsed = Date.now() - activeTarget.startTime;
-                if (elapsed >= activeTarget.duration) {
-                    // Time out! Rival takes seat
-                    activeTarget.seat.status = 'rival';
-                    combo = 0;
-                    playSound(220, 0.25, 'sawtooth'); // Low pitch miss sound
-                    activeTarget = null;
-
-                    if (updateStats() === 0) {
-                        endGame();
-                        return;
-                    }
-
-                    setTimeout(pickNextTarget, 200);
-                }
-            }
-
-            drawField();
-            requestAnimationFrame(gameLoop);
-        }
-
-        function handleSeatClick(e) {
-            if (!isPlaying || !activeTarget) return;
-
-            const rect = canvas.getBoundingClientRect();
-            const scaleX = canvas.width / rect.width;
-            const scaleY = canvas.height / rect.height;
-
-            const clickX = (e.clientX - rect.left) * scaleX;
-            const clickY = (e.clientY - rect.top) * scaleY;
-
-            const seat = activeTarget.seat;
-
-            if (
-                clickX >= seat.x &&
-                clickX <= seat.x + SEAT_WIDTH &&
-                clickY >= seat.y &&
-                clickY <= seat.y + SEAT_HEIGHT
-            ) {
-                // Success! Player gets seat
-                seat.status = 'player';
-                combo++;
-                const multiplier = Math.min(5, Math.floor(combo / 3) + 1);
-                score += 100 * multiplier;
-
-                playSound(880, 0.15, 'sine'); // High pitch success
-                activeTarget = null;
-
-                if (updateStats() === 0) {
-                    endGame();
-                    return;
-                }
-
-                setTimeout(pickNextTarget, 150);
-            }
-        }
-
-        function startGame() {
-            initAudio();
-            initSeats();
-            score = 0;
-            combo = 0;
-            isPlaying = true;
-            overlay.classList.add('hidden');
-            updateStats();
-            pickNextTarget();
-            requestAnimationFrame(gameLoop);
-        }
-
-        function endGame() {
-            isPlaying = false;
-            activeTarget = null;
-
-            const playerFans = seats.filter(s => s.status === 'player').length;
-            const rivalFans = seats.filter(s => s.status === 'rival').length;
-
-            overlayTitle.innerText = playerFans > rivalFans ? "Zwycięstwo!" : "Koniec Meczu!";
-            overlayDesc.innerHTML = `
-                Trybuny zostały całkowicie zapełnione!<br>
-                <strong class="text-blue-400">Twoi kibice: ${playerFans}</strong> | 
-                <strong class="text-red-400">Kibice rywala: ${rivalFans}</strong><br>
-                Końcowy wynik: <span class="text-yellow-400 font-bold">${score} pkt</span>
-            `;
-            startBtn.innerText = "Zagraj ponownie";
-            overlay.classList.remove('hidden');
-        }
-
-        // Event Listeners
-        canvas.addEventListener('pointerdown', handleSeatClick);
-        startBtn.addEventListener('click', startGame);
-
-        // Initial draw
-        initSeats();
-        drawField();
-        updateStats();
-    </script>
-</body>
-</html>
+                startTime: Date.
