@@ -242,4 +242,114 @@
 
             activeTarget = {
                 seat: selectedSeat,
-                startTime: Date.
+                startTime: Date.now(),
+                duration: finalDuration,
+                isFast: finalDuration < 600
+            };
+
+            playSound(activeTarget.isFast ? 880 : 587, 0.08, 'triangle');
+        }
+
+        function gameLoop() {
+            if (!isPlaying) return;
+
+            if (activeTarget) {
+                const elapsed = Date.now() - activeTarget.startTime;
+                if (elapsed >= activeTarget.duration) {
+                    activeTarget.seat.status = 'rival';
+                    combo = 0;
+                    playSound(220, 0.2, 'sawtooth');
+                    activeTarget = null;
+
+                    if (updateStats() === 0) {
+                        endGame();
+                        return;
+                    }
+
+                    setTimeout(pickNextTarget, 100);
+                }
+            }
+
+            drawField();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function handleSeatClick(e) {
+            if (!isPlaying || !activeTarget) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+
+            const clickX = (e.clientX - rect.left) * scaleX;
+            const clickY = (e.clientY - rect.top) * scaleY;
+
+            const seat = activeTarget.seat;
+
+            if (
+                clickX >= seat.x &&
+                clickX <= seat.x + SEAT_WIDTH &&
+                clickY >= seat.y &&
+                clickY <= seat.y + SEAT_HEIGHT
+            ) {
+                seat.status = 'player';
+                combo++;
+                totalClicks++;
+                
+                // Premia punktowa za bardzo szybkie celowanie
+                const speedBonus = activeTarget.isFast ? 100 : 0;
+                score += 100 + speedBonus;
+
+                playSound(1000, 0.1, 'sine');
+                activeTarget = null;
+
+                if (updateStats() === 0) {
+                    endGame();
+                    return;
+                }
+
+                setTimeout(pickNextTarget, Math.max(50, 150 - (totalClicks * 2)));
+            }
+        }
+
+        function startGame() {
+            initAudio();
+            initSeats();
+            score = 0;
+            combo = 0;
+            totalClicks = 0;
+            isPlaying = true;
+            overlay.classList.add('hidden');
+            updateStats();
+            pickNextTarget();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function endGame() {
+            isPlaying = false;
+            activeTarget = null;
+
+            const playerFans = seats.filter(s => s.status === 'player').length;
+            const rivalFans = seats.filter(s => s.status === 'rival').length;
+
+            overlayTitle.innerText = playerFans > rivalFans ? "Zwycięstwo!" : "Koniec Meczu!";
+            overlayDesc.innerHTML = `
+                Trybuny zostały zapełnione!<br>
+                <strong class="text-blue-400">Twoi kibice: ${playerFans}</strong> | 
+                <strong class="text-red-400">Kibice rywala: ${rivalFans}</strong><br>
+                Osiągnięty poziom: <span class="text-yellow-400 font-bold">${Math.floor(totalClicks / 5) + 1}</span><br>
+                Końcowy wynik: <span class="text-yellow-400 font-bold">${score} pkt</span>
+            `;
+            startBtn.innerText = "Zagraj ponownie";
+            overlay.classList.remove('hidden');
+        }
+
+        canvas.addEventListener('pointerdown', handleSeatClick);
+        startBtn.addEventListener('click', startGame);
+
+        initSeats();
+        drawField();
+        updateStats();
+    </script>
+</body>
+</html>
