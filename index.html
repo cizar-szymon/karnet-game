@@ -43,9 +43,9 @@
             <div id="overlay" class="absolute inset-0 bg-slate-950/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center">
                 <h2 id="overlayTitle" class="text-3xl font-extrabold text-yellow-400 mb-2">Zajmij Miejsce!</h2>
                 <p id="overlayDesc" class="text-sm text-slate-300 mb-6 max-w-md">
-                    Szybko klikaj w podświetlone miejsca! Tempo gry rośnie z każdym zajętym miejscem, a czasy reakcji są losowe.
+                    Szybko klikaj w podświetlone miejsca! Postacie kibiców są teraz wyraźniejsze. Tempo gry rośnie z każdym zajętym miejscem!
                 </p>
-                <button id="startBtn" class="bg-yellow-500 hover:bg-yellow-400 text-slate-950 font-bold px-8 py-3 rounded-full text-lg transition duration-200 shadow-lg transform active:scale-95">
+                <button id="startBtn" class="bg-yellow-500 hover:bg-yellow-400 text-slate-950 font-bold px-8 py-3 rounded-full text-lg transition duration-200 shadow-lg transform active:scale-95 cursor-pointer">
                     Graj teraz
                 </button>
             </div>
@@ -98,9 +98,8 @@
         let combo = 0;
         let isPlaying = false;
         let totalClicks = 0;
-        let baseTime = 1800; // Czas początkowy w ms
+        let baseTime = 1800;
 
-        // Audio Context (Synthesized SFX)
         let audioCtx = null;
 
         function initAudio() {
@@ -112,6 +111,9 @@
         function playSound(freq, duration, type = 'sine') {
             if (!audioCtx) return;
             try {
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
                 const osc = audioCtx.createOscillator();
                 const gain = audioCtx.createGain();
                 osc.type = type;
@@ -123,6 +125,21 @@
                 osc.start();
                 osc.stop(audioCtx.currentTime + duration);
             } catch(e) {}
+        }
+
+        // Safe helper for rounded rectangles
+        function drawRoundedRect(x, y, w, h, r) {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.arcTo(x + w, y, x + w, y + r, r);
+            ctx.lineTo(x + w, y + h - r);
+            ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+            ctx.lineTo(x + r, y + h);
+            ctx.arcTo(x, y + h, x, y + h - r, r);
+            ctx.lineTo(x, y + r);
+            ctx.arcTo(x, y, x + r, y, r);
+            ctx.closePath();
         }
 
         class Seat {
@@ -147,20 +164,34 @@
                     ctx.strokeStyle = '#ef4444';
                 }
 
-                ctx.beginPath();
-                ctx.roundRect(this.x, this.y, SEAT_WIDTH, SEAT_HEIGHT, 6);
+                drawRoundedRect(this.x, this.y, SEAT_WIDTH, SEAT_HEIGHT, 6);
                 ctx.fill();
                 ctx.stroke();
 
+                // Detailed & Prettier Fan Drawing
                 if (this.status !== 'empty') {
-                    ctx.fillStyle = this.status === 'player' ? '#93c5fd' : '#fca5a5';
-                    ctx.beginPath();
-                    ctx.arc(this.x + SEAT_WIDTH / 2, this.y + 12, 7, 0, Math.PI * 2);
-                    ctx.fill();
+                    const centerX = this.x + SEAT_WIDTH / 2;
 
+                    // Torso / Shirt with nice shoulders & vertical stripe pattern
                     ctx.fillStyle = this.status === 'player' ? '#2563eb' : '#dc2626';
                     ctx.beginPath();
-                    ctx.arc(this.x + SEAT_WIDTH / 2, this.y + 28, 10, Math.PI, 0);
+                    ctx.roundRect(this.x + 6, this.y + 14, SEAT_WIDTH - 12, SEAT_HEIGHT - 16, [6, 6, 2, 2]);
+                    ctx.fill();
+
+                    // Shirt stripe accent (white for player, yellow for rival)
+                    ctx.fillStyle = this.status === 'player' ? '#ffffff' : '#fef08a';
+                    ctx.fillRect(centerX - 2, this.y + 14, 4, SEAT_HEIGHT - 16);
+
+                    // Head (Skin tone)
+                    ctx.fillStyle = this.status === 'player' ? '#bfdbfe' : '#fecaca';
+                    ctx.beginPath();
+                    ctx.arc(centerX, this.y + 10, 7, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Hair / Cap detail on top of the head
+                    ctx.fillStyle = this.status === 'player' ? '#1e3a8a' : '#7f1d1d';
+                    ctx.beginPath();
+                    ctx.arc(centerX, this.y + 8, 7, Math.PI, 0, false);
                     ctx.fill();
                 }
             }
@@ -193,11 +224,9 @@
                 const elapsed = Date.now() - activeTarget.startTime;
                 const progress = Math.min(1, elapsed / activeTarget.duration);
 
-                // Kolor pierścienia w zależności od czasu (bardzo szybkie na czerwono)
                 ctx.strokeStyle = activeTarget.isFast ? '#ef4444' : '#facc15';
                 ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.roundRect(seat.x - 3, seat.y - 3, SEAT_WIDTH + 6, SEAT_HEIGHT + 6, 8);
+                drawRoundedRect(seat.x - 3, seat.y - 3, SEAT_WIDTH + 6, SEAT_HEIGHT + 6, 8);
                 ctx.stroke();
 
                 ctx.fillStyle = activeTarget.isFast ? '#ef4444' : '#facc15';
@@ -232,11 +261,9 @@
             const randomIndex = Math.floor(Math.random() * emptySeats.length);
             const selectedSeat = emptySeats[randomIndex];
 
-            // 1. Zwiększanie poziomu trudności (skracanie czasu bazowego)
             const speedFactor = Math.min(1200, totalClicks * 25);
             let currentBase = Math.max(450, baseTime - speedFactor);
 
-            // 2. Losowa zmienność (±30% od czasu bazowego)
             const randomMultiplier = 0.7 + (Math.random() * 0.6);
             const finalDuration = Math.max(350, currentBase * randomMultiplier);
 
@@ -274,15 +301,15 @@
             requestAnimationFrame(gameLoop);
         }
 
-        function handleSeatClick(e) {
+        function handleInteraction(clientX, clientY) {
             if (!isPlaying || !activeTarget) return;
 
             const rect = canvas.getBoundingClientRect();
             const scaleX = canvas.width / rect.width;
             const scaleY = canvas.height / rect.height;
 
-            const clickX = (e.clientX - rect.left) * scaleX;
-            const clickY = (e.clientY - rect.top) * scaleY;
+            const clickX = (clientX - rect.left) * scaleX;
+            const clickY = (clientY - rect.top) * scaleY;
 
             const seat = activeTarget.seat;
 
@@ -296,7 +323,6 @@
                 combo++;
                 totalClicks++;
                 
-                // Premia punktowa za bardzo szybkie celowanie
                 const speedBonus = activeTarget.isFast ? 100 : 0;
                 score += 100 + speedBonus;
 
@@ -344,8 +370,15 @@
             overlay.classList.remove('hidden');
         }
 
-        canvas.addEventListener('pointerdown', handleSeatClick);
+        canvas.addEventListener('pointerdown', (e) => {
+            handleInteraction(e.clientX, e.clientY);
+        });
+
         startBtn.addEventListener('click', startGame);
+        startBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            startGame();
+        });
 
         initSeats();
         drawField();
