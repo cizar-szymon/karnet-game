@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Symulator Zajmowania Miejsc - Stadium Booker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
+            background-color: #0f172a;
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen text-white font-sans p-2">
+
+    <div class="w-full max-w-2xl bg-slate-800 rounded-xl shadow-2xl p-4 border border-slate-700">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-4 pb-2 border-b border-slate-700">
+            <div>
+                <h1 class="text-xl font-bold text-yellow-400">Stadium Seat Booker</h1>
+                <p class="text-xs text-slate-400">Zajmuj wolne miejsca zanim zrobi to rywal!</p>
+            </div>
+            <div class="text-right">
+                <div class="text-2xl font-black text-emerald-400" id="score">0 pkt</div>
+                <div class="text-xs text-slate-400" id="combo">Mnożnik: x1</div>
+            </div>
+        </div>
+
+        <!-- Canvas -->
+        <div class="relative rounded-lg overflow-hidden border-2 border-slate-600 bg-slate-900 shadow-inner">
+            <canvas id="gameCanvas" width="600" height="400"></canvas>
+            
+            <!-- Overlay Start/Game Over -->
+            <div id="overlay" class="absolute inset-0 bg-slate-950/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center">
+                <h2 id="overlayTitle" class="text-3xl font-extrabold text-yellow-400 mb-2">Zajmij Miejsce!</h2>
+                <p id="overlayDesc" class="text-sm text-slate-300 mb-6 max-w-md">
+                    Szybko klikaj w podświetlone na żółto miejsca na trybunie, aby posadzić kibica swojej drużyny (niebieski). 
+                    Jeśli spóźnisz się, miejsce zajmie kibic drużyny przeciwna (czerwony)!
+                </p>
+                <button id="startBtn" class="bg-yellow-500 hover:bg-yellow-400 text-slate-950 font-bold px-8 py-3 rounded-full text-lg transition duration-200 shadow-lg transform active:scale-95">
+                    Graj teraz
+                </button>
+            </div>
+        </div>
+
+        <!-- Stats Bar -->
+        <div class="mt-4 grid grid-cols-3 gap-2 text-center text-xs bg-slate-900/60 p-2 rounded-lg border border-slate-700">
+            <div>
+                <span class="block text-slate-400">Twoi kibice:</span>
+                <span id="playerFansCount" class="font-bold text-blue-400 text-sm">0</span>
+            </div>
+            <div>
+                <span class="block text-slate-400">Kibice rywala:</span>
+                <span id="rivalFansCount" class="font-bold text-red-400 text-sm">0</span>
+            </div>
+            <div>
+                <span class="block text-slate-400">Wolne miejsca:</span>
+                <span id="freeSeatsCount" class="font-bold text-yellow-400 text-sm">0</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const overlay = document.getElementById('overlay');
+        const overlayTitle = document.getElementById('overlayTitle');
+        const overlayDesc = document.getElementById('overlayDesc');
+        const startBtn = document.getElementById('startBtn');
+        const scoreEl = document.getElementById('score');
+        const comboEl = document.getElementById('combo');
+        const playerFansEl = document.getElementById('playerFansCount');
+        const rivalFansEl = document.getElementById('rivalFansCount');
+        const freeSeatsEl = document.getElementById('freeSeatsCount');
+
+        // Game Grid Parameters
+        const ROWS = 6;
+        const COLS = 10;
+        const SEAT_WIDTH = 40;
+        const SEAT_HEIGHT = 35;
+        const PADDING_X = 15;
+        const PADDING_Y = 15;
+        const OFFSET_TOP = 70;
+        const OFFSET_LEFT = (canvas.width - (COLS * (SEAT_WIDTH + PADDING_X))) / 2 + 5;
+
+        // Game State
+        let seats = [];
+        let activeTarget = null;
+        let score = 0;
+        let combo = 0;
+        let isPlaying = false;
+        let timerId = null;
+        let baseTime = 2000; // time in ms to click
+
+        // Audio Context (Synthesized SFX)
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        function playSound(freq, duration, type = 'sine') {
+            if (!audioCtx) return;
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+            } catch(e) {}
+        }
+
+        class Seat {
+            constructor(r, c) {
+                this.r = r;
+                this.c = c;
+                this.x = OFFSET_LEFT + c * (SEAT_WIDTH + PADDING_X);
+                this.y = OFFSET_TOP + r * (SEAT_HEIGHT + PADDING_Y);
+                this.status = 'empty'; // 'empty', 'player', 'rival'
+            }
+
+            draw() {
+                // Draw seat base
+                ctx.lineWidth = 2;
+                if (this.status === 'empty') {
+                    ctx.fillStyle = '#334155';
+                    ctx.strokeStyle = '#475569';
+                } else if (this.status === 'player') {
+                    ctx.fillStyle = '#1d4ed8';
+                    ctx.strokeStyle = '#3b82f6';
+                } else if (this.status === 'rival') {
+                    ctx.fillStyle = '#b91c1c';
+                    ctx.strokeStyle = '#ef4444';
+                }
+
+                // Rounded Rect for Seat
+                ctx.beginPath();
+                ctx.roundRect(this.x, this.y, SEAT_WIDTH, SEAT_HEIGHT, 6);
+                ctx.fill();
+                ctx.stroke();
+
+                // Draw Fan Avatar if occupied
+                if (this.status !== 'empty') {
+                    // Head
+                    ctx.fillStyle = this.status === 'player' ? '#93c5fd' : '#fca5a5';
+                    ctx.beginPath();
+                    ctx.arc(this.x + SEAT_WIDTH / 2, this.y + 12, 7, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Body
+                    ctx.fillStyle = this.status === 'player' ? '#2563eb' : '#dc2626';
+                    ctx.beginPath();
+                    ctx.arc(this.x + SEAT_WIDTH / 2, this.y + 28, 10, Math.PI, 0);
+                    ctx.fill();
+                }
+            }
+        }
+
+        function initSeats() {
+            seats = [];
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    seats.push(new Seat(r, c));
+                }
+            }
+        }
+
+        function drawField() {
+            // Background / Pitch view at top
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Pitch Banner
+            ctx.fillStyle = '#15803d';
+            ctx.fillRect(0, 0, canvas.width, 45);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '12px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('BOISKO - MECZ O MIEJSCE NA TRYBUNACH', canvas.width / 2, 28);
+
+            // Draw Seats
+            seats.forEach(seat => seat.draw());
+
+            // Draw Target Highlight
+            if (activeTarget && activeTarget.seat.status === 'empty') {
+                const seat = activeTarget.seat;
+                const elapsed = Date.now() - activeTarget.startTime;
+                const progress = Math.min(1, elapsed / activeTarget.duration);
+
+                // Pulse ring
+                ctx.strokeStyle = '#facc15';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.roundRect(seat.x - 3, seat.y - 3, SEAT_WIDTH + 6, SEAT_HEIGHT + 6, 8);
+                ctx.stroke();
+
+                // Countdown Bar
+                ctx.fillStyle = '#facc15';
+                ctx.fillRect(seat.x, seat.y + SEAT_HEIGHT + 3, SEAT_WIDTH * (1 - progress), 4);
+            }
+        }
+
+        function updateStats() {
+            const playerFans = seats.filter(s => s.status === 'player').length;
+            const rivalFans = seats.filter(s => s.status === 'rival').length;
+            const freeSeats = seats.filter(s => s.status === 'empty').length;
+
+            scoreEl.innerText = `${score} pkt`;
+            comboEl.innerText = `Mnożnik: x${Math.min(5, Math.floor(combo / 3) + 1)}`;
+            playerFansEl.innerText = playerFans;
+            rivalFansEl.innerText = rivalFans;
+            freeSeatsEl.innerText = freeSeats;
+
+            return freeSeats;
+        }
+
+        function pickNextTarget() {
+            const emptySeats = seats.filter(s => s.status === 'empty');
+            
+            if (emptySeats.length === 0) {
+                endGame();
+                return;
+            }
+
+            const randomIndex = Math.floor(Math.random() * emptySeats.length);
+            const selectedSeat = emptySeats[randomIndex];
+
+            // Calculate difficulty speed (gets faster as stadium fills)
+            const filledRatio = (seats.length - emptySeats.length) / seats.length;
+            const timeForSeat = Math.max(600, baseTime - (filledRatio * 1100));
+
+            activeTarget = {
+                seat: selectedSeat,
+                startTime: Date.now(),
+                duration: timeForSeat
+            };
+
+            playSound(587, 0.1, 'triangle'); // D5 note prompt
+        }
+
+        function gameLoop() {
+            if (!isPlaying) return;
+
+            if (activeTarget) {
+                const elapsed = Date.now() - activeTarget.startTime;
+                if (elapsed >= activeTarget.duration) {
+                    // Time out! Rival takes seat
+                    activeTarget.seat.status = 'rival';
+                    combo = 0;
+                    playSound(220, 0.25, 'sawtooth'); // Low pitch miss sound
+                    activeTarget = null;
+
+                    if (updateStats() === 0) {
+                        endGame();
+                        return;
+                    }
+
+                    setTimeout(pickNextTarget, 200);
+                }
+            }
+
+            drawField();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function handleSeatClick(e) {
+            if (!isPlaying || !activeTarget) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+
+            const clickX = (e.clientX - rect.left) * scaleX;
+            const clickY = (e.clientY - rect.top) * scaleY;
+
+            const seat = activeTarget.seat;
+
+            if (
+                clickX >= seat.x &&
+                clickX <= seat.x + SEAT_WIDTH &&
+                clickY >= seat.y &&
+                clickY <= seat.y + SEAT_HEIGHT
+            ) {
+                // Success! Player gets seat
+                seat.status = 'player';
+                combo++;
+                const multiplier = Math.min(5, Math.floor(combo / 3) + 1);
+                score += 100 * multiplier;
+
+                playSound(880, 0.15, 'sine'); // High pitch success
+                activeTarget = null;
+
+                if (updateStats() === 0) {
+                    endGame();
+                    return;
+                }
+
+                setTimeout(pickNextTarget, 150);
+            }
+        }
+
+        function startGame() {
+            initAudio();
+            initSeats();
+            score = 0;
+            combo = 0;
+            isPlaying = true;
+            overlay.classList.add('hidden');
+            updateStats();
+            pickNextTarget();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function endGame() {
+            isPlaying = false;
+            activeTarget = null;
+
+            const playerFans = seats.filter(s => s.status === 'player').length;
+            const rivalFans = seats.filter(s => s.status === 'rival').length;
+
+            overlayTitle.innerText = playerFans > rivalFans ? "Zwycięstwo!" : "Koniec Meczu!";
+            overlayDesc.innerHTML = `
+                Trybuny zostały całkowicie zapełnione!<br>
+                <strong class="text-blue-400">Twoi kibice: ${playerFans}</strong> | 
+                <strong class="text-red-400">Kibice rywala: ${rivalFans}</strong><br>
+                Końcowy wynik: <span class="text-yellow-400 font-bold">${score} pkt</span>
+            `;
+            startBtn.innerText = "Zagraj ponownie";
+            overlay.classList.remove('hidden');
+        }
+
+        // Event Listeners
+        canvas.addEventListener('pointerdown', handleSeatClick);
+        startBtn.addEventListener('click', startGame);
+
+        // Initial draw
+        initSeats();
+        drawField();
+        updateStats();
+    </script>
+</body>
+</html>
